@@ -2,106 +2,112 @@
 
 #include "task.h"
 
-#include <boost/graph/adjacency_list.hpp>
-#include <boost/graph/graph_traits.hpp>
+#include <boost/graph/depth_first_search.hpp>
+#include <boost/graph/topological_sort.hpp>
 
 #include <iostream>
 #include <typeinfo>
 
 namespace pipes
 {
-class TaskGraph::Impl
+class CycleFoundException : public std::exception
 {
-public:
-	using Graph = boost::adjacency_list<boost::setS, boost::vecS, boost::bidirectionalS, TaskPtr>;
-
-	TaskPtr CreateTask()
-	{
-		auto v = boost::add_vertex(m_graph);
-		auto task = std::make_shared<Task>(v);
-		m_graph[v] = task;
-
-		m_tasks.push_back(task);
-		return task;
-	}
-
-	void DestroyTask(TaskPtr task)
-	{
-		boost::remove_vertex(task->GetId(), m_graph);
-		m_tasks.remove(task);
-	}
-
-	TaskGraph::DependencyCreated CreateDependency(TaskPtr upstreamTask, TaskPtr downstreamTask)
-	{
-		auto edge = boost::add_edge(upstreamTask->GetId(), downstreamTask->GetId(), m_graph);
-		if (edge.second)
-		{
-			return TaskGraph::DependencyCreated::Created;
-		}
-		return TaskGraph::DependencyCreated::AlreadyExists;
-	}
-
-	void DestroyDependency(TaskPtr upstreamTask, TaskPtr downstreamTask)
-	{
-		boost::remove_edge(upstreamTask->GetId(), downstreamTask->GetId(), m_graph);
-	}
-
-	const std::list<TaskPtr>& GetTasks() const { return m_tasks; }
-
-	std::list<TaskPtr> GetDependenciesOfTask(TaskPtr task)
-	{
-		std::list<TaskPtr> dependencies;
-		typename boost::graph_traits<Graph>::in_edge_iterator iter, end;
-
-		auto inEdges = boost::in_edges(task->GetId(), m_graph);
-		for (boost::tie(iter, end) = inEdges; iter != end; ++iter)
-		{
-			dependencies.push_back(m_graph[boost::source(*iter, m_graph)]);
-		}
-		return dependencies;
-	}
-
-	std::list<TaskPtr> GetDependentsOfTask(TaskPtr task)
-	{
-		std::list<TaskPtr> dependencies;
-		typename boost::graph_traits<Graph>::out_edge_iterator iter, end;
-
-		auto inEdges = boost::out_edges(task->GetId(), m_graph);
-		for (boost::tie(iter, end) = inEdges; iter != end; ++iter)
-		{
-			dependencies.push_back(m_graph[boost::target(*iter, m_graph)]);
-		}
-		return dependencies;
-	}
-
-private:
-	static TaskId next_task_id() { return s_nextId++; }
-	Graph m_graph;
-	std::list<TaskPtr> m_tasks;
-	static TaskId s_nextId;
 };
 
-TaskGraph::TaskId TaskGraph::Impl::s_nextId = 0;
-
-TaskGraph::TaskGraph() : m_implementation(std::make_unique<TaskGraph::Impl>()) {}
-TaskGraph::~TaskGraph() { m_implementation = nullptr; }
-
-TaskPtr TaskGraph::CreateTask() { return m_implementation->CreateTask(); }
-void TaskGraph::DestroyTask(TaskPtr task) { m_implementation->DestroyTask(task); }
-
-TaskGraph::DependencyCreated TaskGraph::CreateDependency(TaskPtr upstreamTask, TaskPtr downstreamTask)
+class CycleDetectorVisistor : public boost::default_dfs_visitor
 {
-	return m_implementation->CreateDependency(upstreamTask, downstreamTask);
-}
-void TaskGraph::DestroyDependency(TaskPtr upstreamTask, TaskPtr downstreamTask)
+public:
+	void back_edge(boost::graph_traits<TaskGraph>::edge_descriptor edge, const TaskGraph &graph) const
+	{
+		throw CycleFoundException();
+	}
+};
+
+TaskVertexId CreateTask(TaskGraph &graph)
 {
-	m_implementation->DestroyDependency(upstreamTask, downstreamTask);
+	auto v = boost::add_vertex(graph);
+	auto task = std::make_shared<Task>(v);
+	graph[v] = task;
+
+	return v;
 }
 
-const std::list<TaskPtr>& TaskGraph::GetTasks() const { return m_implementation->GetTasks(); }
-std::list<TaskPtr> TaskGraph::GetDependenciesOfTask(TaskPtr task)
+void DestroyTask(TaskGraph &graph, const TaskVertexId &taskVertexId) { boost::remove_vertex(taskVertexId, graph); }
+
+TaskPtr GetTask(const TaskGraph &graph, const TaskVertexId &taskVertexId) { return graph[taskVertexId]; }
+
+DependencyCreated CreateDependency(TaskGraph &graph, const TaskVertexId &upstreamId, const TaskVertexId &downstreamId)
 {
-	return m_implementation->GetDependenciesOfTask(task);
+	auto edge = boost::add_edge(upstreamId, downstreamId, graph);
+
+	try
+	{
+		// Check if adding the edge creates a cycle in the graph
+		CycleDetectorVisistor visitor;
+		boost::depth_first_search(graph, boost::visitor(visitor));
+	}
+	catch (CycleFoundException)
+	{
+		// if it does, remove it
+		boost::remove_edge(upstreamId, downstreamId, graph);
+		return DependencyCreated::CycleDetected;
+	}
+
+	if (edge.second)
+	{
+		return DependencyCreated::Created;
+	}
+	return DependencyCreated::AlreadyExists;
 }
-std::list<TaskPtr> TaskGraph::GetDependentsOfTask(TaskPtr task) { return m_implementation->GetDependentsOfTask(task); }
+
+void DestroyDependency(TaskGraph &graph, const TaskVertexId &upstreamId, const TaskVertexId &downstreamId)
+{
+	boost::remove_edge(upstreamId, downstreamId, graph);
+}
+
+std::list<TaskVertexId> GetDependenciesOfTask(const TaskGraph &graph, const TaskVertexId &taskId)
+{
+	std::list<TaskVertexId> dependencies;
+	typename boost::graph_traits<TaskGraph>::in_edge_iterator iter, end;
+
+	auto inEdges = boost::in_edges(taskId, graph);
+	for (boost::tie(iter, end) = inEdges; iter != end; ++iter)
+	{
+		dependencies.push_back(boost::source(*iter, graph));
+	}
+	return dependencies;
+}
+
+std::list<TaskVertexId> GetDependentsOfTask(const TaskGraph &graph, const TaskVertexId &taskId)
+{
+	std::list<TaskVertexId> dependencies;
+	typename boost::graph_traits<TaskGraph>::out_edge_iterator iter, end;
+
+	auto inEdges = boost::out_edges(taskId, graph);
+	for (boost::tie(iter, end) = inEdges; iter != end; ++iter)
+	{
+		dependencies.push_back(boost::target(*iter, graph));
+	}
+	return dependencies;
+}
+
+bool DependencyExists(TaskGraph &graph, const TaskVertexId &upstreamId, const TaskVertexId &downstreamId)
+{
+	bool exists = !boost::add_edge(upstreamId, downstreamId, graph).second;
+	if (!exists)
+	{
+		boost::remove_edge(upstreamId, downstreamId, graph);
+	}
+	return exists;
+}
+
+TaskGraphVertexIteratorPair TasksIterator(TaskGraph &graph) { return boost::vertices(graph); }
+
+std::list<TaskVertexId> TopologicalSort(const TaskGraph &graph)
+{
+	std::list<TaskVertexId> tasks;
+	boost::topological_sort(graph, std::front_inserter(tasks));
+	return tasks;
+}
+
 }  // namespace pipes

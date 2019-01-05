@@ -1,5 +1,8 @@
 #pragma once
 
+#include <boost/graph/adjacency_list.hpp>
+#include <boost/graph/graph_traits.hpp>
+
 #include <list>
 #include <memory>
 
@@ -8,35 +11,28 @@ namespace pipes
 class Task;
 using TaskPtr = std::shared_ptr<Task>;
 
-class TaskGraph
+using TaskGraph = boost::adjacency_list<boost::setS, boost::vecS, boost::bidirectionalS, TaskPtr>;
+using TaskVertexId = typename TaskGraph::vertex_descriptor;
+using TaskGraphVertexIterator = boost::graph_traits<TaskGraph>::vertex_iterator;
+using TaskGraphVertexIteratorPair = std::pair<TaskGraphVertexIterator, TaskGraphVertexIterator>;
+
+enum class DependencyCreated
 {
-public:
-	using TaskId = unsigned long;
-
-	enum class DependencyCreated
-	{
-		Created,
-		AlreadyExists
-	};
-
-	TaskGraph();
-	~TaskGraph();
-
-	TaskGraph(const TaskGraph& graph) = delete;
-	TaskGraph& operator=(const TaskGraph& graph) = delete;
-
-	TaskPtr CreateTask();
-	void DestroyTask(TaskPtr task);
-
-	DependencyCreated CreateDependency(TaskPtr upstreamTask, TaskPtr downstreamTask);
-	void DestroyDependency(TaskPtr upstreamTask, TaskPtr downstreamTask);
-
-	const std::list<TaskPtr>& GetTasks() const;
-	std::list<TaskPtr> GetDependenciesOfTask(TaskPtr task);
-	std::list<TaskPtr> GetDependentsOfTask(TaskPtr task);
-
-private:
-	class Impl;
-	std::unique_ptr<Impl> m_implementation;
+	Created,
+	CycleDetected,
+	AlreadyExists
 };
+
+TaskVertexId CreateTask(TaskGraph &graph);
+void DestroyTask(TaskGraph &graph, const TaskVertexId &taskVertexId);
+TaskPtr GetTask(const TaskGraph &graph, const TaskVertexId &taskVertexId);
+DependencyCreated CreateDependency(TaskGraph &graph, const TaskVertexId &upstreamId, const TaskVertexId &downstreamId);
+void DestroyDependency(TaskGraph &graph, const TaskVertexId &upstreamId, const TaskVertexId &downstreamId);
+std::list<TaskVertexId> GetDependenciesOfTask(const TaskGraph &graph, const TaskVertexId &taskId);
+std::list<TaskVertexId> GetDependentsOfTask(const TaskGraph &graph, const TaskVertexId &taskId);
+TaskGraphVertexIteratorPair TasksIterator(TaskGraph &graph);
+bool DependencyExists(TaskGraph &graph, const TaskVertexId &upstreamId, const TaskVertexId &downstreamId);
+
+std::list<TaskVertexId> TopologicalSort(const TaskGraph &graph);
+
 }  // namespace pipes

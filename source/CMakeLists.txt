@@ -1,7 +1,11 @@
+add_subdirectory(debug)
+
 set(PIPES_SOURCES
         "task.cpp"
         "task_execution.cpp"
         "task_graph.cpp"
+        "scheduler.cpp"
+        "worker_thread.cpp"
     )
 
 add_library(
@@ -23,3 +27,8 @@ target_compile_options(
         -pedantic-errors
 )
 
+target_link_libraries(
+    pipes
+    PRIVATE
+        debug_pipes
+)
